@@ -21,7 +21,7 @@ pub struct GeminiPostBodySafetySettings {
     pub threshold: GeminiSafetyThreshold
 }
 
-#[derive(Debug, Clone, Serialize,)]
+#[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GeminiPostBodyGenerationConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
