@@ -5,33 +5,46 @@ mod enums;
 use std::env;
 
 use defs::GeminiContentBody;
+use serenity::all::{GatewayIntents, Message, Ready};
 use serenity::async_trait;
-use serenity::all::{GatewayIntents, Message, Ready, CreateEmbed};
+use serenity::builder::{CreateEmbed, CreateMessage};
 use serenity::client::EventHandler;
 use serenity::model::Color;
 use serenity::prelude::Context;
 
 use crate::{
-    constants::{DELETE_THRESHOLD, WARN_THRESHOLD, DEBUG_LOG_CHANNEL, MOD_LOG_CHANNEL},
-    defs::{GeminiPostBody, GeminiContent, GeminiPostResponse, GeminiPostBodySafetySettings, GeminiPostBodyGenerationConfig},
-    enums::{GeminiHarmCategory, GeminiSafetyThreshold}
+    constants::{DEBUG_LOG_CHANNEL, DELETE_THRESHOLD, MOD_LOG_CHANNEL, WARN_THRESHOLD},
+    defs::{
+        GeminiContent, GeminiPostBody, GeminiPostBodyGenerationConfig,
+        GeminiPostBodySafetySettings, GeminiPostResponse,
+    },
+    enums::{GeminiHarmCategory, GeminiSafetyThreshold},
 };
 
 #[inline]
 fn get_intents() -> GatewayIntents {
     let mut intents = GatewayIntents::empty();
-        intents.insert(GatewayIntents::GUILDS);
-        intents.insert(GatewayIntents::GUILD_MESSAGES);
-        intents.insert(GatewayIntents::MESSAGE_CONTENT);
+    intents.insert(GatewayIntents::GUILDS);
+    intents.insert(GatewayIntents::GUILD_MESSAGES);
+    intents.insert(GatewayIntents::MESSAGE_CONTENT);
     intents
 }
 
-fn generate_embed(verb: &str, msg: &Message, score: u16, reason: &str) -> serenity::builder::CreateEmbed {
+fn generate_embed(verb: &str, msg: &Message, score: u16, reason: &str) -> CreateMessage {
     let embed = CreateEmbed::default()
         .title(format!("{}{}", msg.author.tag(), verb))
         .color(Color::RED)
-        .description(format!(">>> *Message: * :warning: ||{}||\n*Score: *{}\n*AI Thoughts: *{}", &msg.content[0..50], score, reason));
-    embed
+        .description(format!(
+            ">>> ***Message: *** :warning: ||{}||\n***Score: ***{}\n***AI Thoughts: ***{}",
+            msg.content
+                .char_indices()
+                .take(100)
+                .map(|f| f.1)
+                .collect::<String>(),
+            score,
+            reason
+        ));
+    CreateMessage::new().embed(embed)
 }
 
 struct Handler;
@@ -42,10 +55,8 @@ impl EventHandler for Handler {
         log::info!("Connected as {}", r.user.name);
     }
     async fn message(&self, ctx: Context, msg: Message) {
-        let eligible = 
-            !msg.author.bot &&
-            !msg.content.is_empty();
-        
+        let eligible = !msg.author.bot && !msg.content.is_empty();
+
         if !eligible {
             return;
         }
@@ -53,11 +64,10 @@ impl EventHandler for Handler {
         let client = reqwest::Client::new();
 
         let body = GeminiPostBody {
-            contents: vec![
-                GeminiContent {
-                    parts: vec![
-                        GeminiContentBody {
-                            text: format!(r#"Determine how well the posts sent by users are suitable for posting on social networking sites.
+            contents: vec![GeminiContent {
+                parts: vec![GeminiContentBody {
+                    text: format!(
+                        r#"Determine how well the posts sent by users are suitable for posting on social networking sites.
 This networking site has this rules:
 - Treat everyone with respect. Absolutely no harassment, witch hunting, sexism, racism, or hate speech will be tolerated.
 - No spam or self-promotion (server invites, advertisements, etc) without permission from a staff member. However, please do not interpret just posting a URL as advertising.
@@ -79,12 +89,12 @@ Reasons should be output in detail; do not use ambiguous terms such as discrimin
 Post content: 
 {}
 
-Bad score and reason:"#, msg.content_safe(&ctx.cache))
-                        }
-                    ],
-                    role: None
-                }
-            ],
+Bad score and reason:"#,
+                        msg.content_safe(&ctx.cache)
+                    ),
+                }],
+                role: None,
+            }],
             safety_settings: Some(vec![
                 GeminiPostBodySafetySettings {
                     category: GeminiHarmCategory::SexuallyExplicit,
@@ -106,7 +116,7 @@ Bad score and reason:"#, msg.content_safe(&ctx.cache))
             generation_config: Some(GeminiPostBodyGenerationConfig {
                 temperature: Some(0.0),
                 ..Default::default()
-            })
+            }),
         };
 
         //println!("{:?}", serde_json::to_string(&body).unwrap());
@@ -155,13 +165,47 @@ Bad score and reason:"#, msg.content_safe(&ctx.cache))
         let (score, reason) = separated.unwrap();
 
         let score = score.parse::<u16>().unwrap_or(0);
-        
-        DEBUG_LOG_CHANNEL.say(&ctx, format!("\n```\n{}\n```\nScore: {}, Reason: {}", msg.content_safe(&ctx.cache), score, reason)).await.ok();
+
+        DEBUG_LOG_CHANNEL
+            .say(
+                &ctx,
+                format!(
+                    "\n```\n{}\n```\nScore: {}, Reason: {}",
+                    msg.content_safe(&ctx.cache),
+                    score,
+                    reason
+                ),
+            )
+            .await
+            .ok();
 
         if score >= DELETE_THRESHOLD {
             msg.delete(&ctx).await.ok();
+            MOD_LOG_CHANNEL
+                .send_message(
+                    &ctx,
+                    generate_embed("'s message has been deleted!", &msg, score, reason),
+                )
+                .await
+                .ok();
         } else if score >= WARN_THRESHOLD {
-            msg.reply(&ctx, format!("Your message has been deleted because it is not suitable for posting on social networking sites. (Score: {}, Reason: {})", score, reason)).await.ok();
+            MOD_LOG_CHANNEL
+                .send_message(
+                    &ctx,
+                    generate_embed("' has been warned!", &msg, score, reason),
+                )
+                .await
+                .ok();
+            msg.author
+                .dm(
+                    &ctx,
+                    CreateMessage::new().content(format!(
+                        "Your message has been warned!\nYour message content: {}\nReason: {}",
+                        msg.content, reason
+                    )),
+                )
+                .await
+                .ok();
         }
     }
 }
