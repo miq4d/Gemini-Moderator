@@ -1,3 +1,4 @@
+mod constants;
 mod defs;
 mod enums;
 
@@ -5,17 +6,16 @@ use std::env;
 
 use defs::GeminiContentBody;
 use serenity::async_trait;
-use serenity::all::{GatewayIntents, Message, Ready};
+use serenity::all::{GatewayIntents, Message, Ready, CreateEmbed};
 use serenity::client::EventHandler;
+use serenity::model::Color;
 use serenity::prelude::Context;
 
 use crate::{
+    constants::{DELETE_THRESHOLD, WARN_THRESHOLD, DEBUG_LOG_CHANNEL, MOD_LOG_CHANNEL},
     defs::{GeminiPostBody, GeminiContent, GeminiPostResponse, GeminiPostBodySafetySettings, GeminiPostBodyGenerationConfig},
     enums::{GeminiHarmCategory, GeminiSafetyThreshold}
 };
-
-static DELETE_THRESHOLD: u16 = 850;
-static WARN_THRESHOLD: u16 = 950;
 
 #[inline]
 fn get_intents() -> GatewayIntents {
@@ -24,6 +24,14 @@ fn get_intents() -> GatewayIntents {
         intents.insert(GatewayIntents::GUILD_MESSAGES);
         intents.insert(GatewayIntents::MESSAGE_CONTENT);
     intents
+}
+
+fn generate_embed(verb: &str, msg: &Message, score: u16, reason: &str) -> serenity::builder::CreateEmbed {
+    let embed = CreateEmbed::default()
+        .title(format!("{}{}", msg.author.tag(), verb))
+        .color(Color::RED)
+        .description(format!(">>> *Message: * :warning: ||{}||\n*Score: *{}\n*AI Thoughts: *{}", &msg.content[0..50], score, reason));
+    embed
 }
 
 struct Handler;
@@ -146,9 +154,15 @@ Bad score and reason:"#, msg.content_safe(&ctx.cache))
 
         let (score, reason) = separated.unwrap();
 
-        let score = score.parse::<u32>().unwrap_or(0);
-        println!("Score: {}", score);
-        println!("Reason: {}", reason);
+        let score = score.parse::<u16>().unwrap_or(0);
+        
+        DEBUG_LOG_CHANNEL.say(&ctx, format!("\n```\n{}\n```\nScore: {}, Reason: {}", msg.content_safe(&ctx.cache), score, reason)).await.ok();
+
+        if score >= DELETE_THRESHOLD {
+            msg.delete(&ctx).await.ok();
+        } else if score >= WARN_THRESHOLD {
+            msg.reply(&ctx, format!("Your message has been deleted because it is not suitable for posting on social networking sites. (Score: {}, Reason: {})", score, reason)).await.ok();
+        }
     }
 }
 
